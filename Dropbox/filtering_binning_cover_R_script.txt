@@ -1,0 +1,146 @@
+# Determining the sample size based on the amount of coverage; systematic more coverage
+Sample.Cover.Sys.more.ftn <- function(Pop.mat, Cover.percent, index){
+	# Arranging the data
+	Pop.Cov	    	<- data.frame(Pop.mat[index,],row.names=NULL)
+	names(Pop.Cov) 	<- NULL
+	Pop.Cov 	<- as.matrix(Pop.Cov)
+	Pop.Sum     	<- apply(Pop.Cov,2,sum)
+	Pop.Cov     	<- Pop.Cov[,Pop.Sum>0,drop=F]
+	Pop.mean    	<- apply(Pop.Cov,2,mean)
+
+	# Finding the starting vector (see write up for elaboration on how this works)
+	Cover            <- length(Pop.Cov[1,Pop.Cov[1,]>0])/length(Pop.mean)
+	Pop.Cover.list   <- 1
+	for(i in 2:length(Pop.Cov[,1])){
+	   if(length(Pop.Cov[i,Pop.Cov[i,]>0])/length(Pop.mean) > Cover){
+	      Cover <- length(Pop.Cov[i,Pop.Cov[i,]>0])/length(Pop.mean)
+              Pop.Cover.list <- i
+	   }
+	}
+	Pop.Cover       		<- Pop.Cov[Pop.Cover.list,]
+	Pop.Cov.mat     		<- Pop.Cov
+	Pop.Cov.mat[Pop.Cover.list,]    <- 0
+
+	while(Cover < Cover.percent){
+	   j <- 1
+	   for(i in 1:length(Pop.Cov.mat[,1])){
+	      Sum.Cover   <- Pop.Cov.mat[i,]+Pop.Cover
+	      if(length(Sum.Cover[Sum.Cover>0])/length(Pop.mean) > Cover){
+	         Cover <- length(Sum.Cover[Sum.Cover>0])/length(Pop.mean)
+                 j     <- i
+	      }
+	   }
+	   Pop.Cover	    <- Pop.Cover+Pop.Cov.mat[j,]
+	   Pop.Cover.list   <- c(Pop.Cover.list, j)
+   	   Pop.Cov.mat[j,]  <- 0
+	}
+	return(list(index[Pop.Cover.list],Cover))
+}
+
+# Filtering the outliers for all using zero as reference
+
+Gfiltering.ftn <- function(Data.list, Sdev){
+
+   #Output of this function is a list with the significant peaks
+   #preparing the data by combining it into one long vector
+   Data.vector    <- as.matrix(cbind(rep(1,length(Data.list[[1]][,1])),Data.list[[1]]))
+   for(i in 2:length(Data.list)){
+      Data.vector    <- rbind(Data.vector, as.matrix(cbind(rep(i,length(Data.list[[i]][,1])),Data.list[[i]])))
+   }
+
+   #First step in picking the peaks
+   Peak.std	<- sqrt(sum(Data.vector[,4]^2)/length(Data.vector[,4]))
+   Peak.vector  <- Data.vector[Data.vector[,4]> Sdev*Peak.std,,drop=F]
+   Data.vector  <- Data.vector[Data.vector[,4]<= Sdev*Peak.std,,drop=F]
+
+   #Picking the peaks
+   Peak.std	<- sqrt(sum(Data.vector[,4]^2)/length(Data.vector[,4]))
+
+   while(max(Data.vector[,4])>Sdev*Peak.std){
+      Peak.vector  	<- rbind(Peak.vector,Data.vector[Data.vector[,4]>Sdev*Peak.std,,drop=F])
+      Data.vector  	<- Data.vector[Data.vector[,4]<=Sdev*Peak.std,,drop=F]
+      Peak.std		<- sqrt(sum(Data.vector[,4]^2)/length(Data.vector[,4]))
+   }
+   Peak.std	<- sqrt(sum(Data.vector[,4]^2)/length(Data.vector[,4]))
+   d.freedom 	<- length(Data.vector[,4])
+
+   #Recreating the list
+   Peak.data	<- data.frame(Peak.vector)
+   names(Peak.data) <- c("number","length","height","standard")
+   Peak.list	<- split(Peak.data,Peak.data[,1])
+   for(i in 1:length(Data.list)){
+       Peak.list[[i]] <- Peak.list[[i]][sort.list(Peak.list[[i]][,2]),2:length(Peak.list[[i]][1,])]
+       #Restandardizing
+       Peak.list[[i]][,3] <- Peak.list[[i]][,2]/sum(Peak.list[[i]][,2])
+   }
+
+   Results.list <- list(Peak.list, Peak.std, d.freedom)
+   names(Results.list) <- c("PeakData","StdData","dfData")
+   return(Results.list)
+}
+
+# Finding the smallest difference
+GSmallDifference.ftn   <- function(Data.list){
+   difference <- Data.list[[1]][2:length(Data.list[[1]][,1]),1]-Data.list[[1]][1:length(Data.list[[1]][,1])-1,1]
+   min.dif <- min(difference[difference > 0])
+   for(i in 1:length(Data.list)){
+      difference <- Data.list[[i]][2:length(Data.list[[i]][,1]),1]-Data.list[[i]][1:length(Data.list[[i]][,1])-1,1]
+      min.dif1	 <- min(difference[difference > 0])
+      if(min.dif >  min.dif1){min.dif <- min.dif1}
+   }
+   return(min.dif)
+}
+
+
+#Group clustering Function
+
+GclustBin.ftn <- function(Data.list, Class.Size){
+   # class size is the difference between the centers of two classes
+   # Taking the lengths aside for clustering
+   lengths <- Data.list[[1]][,1]
+   for(i in 2:length(Data.list)){
+      lengths <- c(lengths, Data.list[[i]][,1])
+   }
+   lengths <- sort(lengths)
+
+   # keeping only non repetitive classes
+   
+   lengths <- lengths[(lengths-c(0,lengths[1:(length(lengths)-1)]))>0]
+
+   # creating a matrix of the unbinned groups
+   Data.mat <- lengths
+   for(i in 1: length(Data.list)){
+      Data.mat <- cbind(Data.mat, rep(0,length(lengths)))
+      for(j in 1:length(Data.list[[i]][,1])){
+          Data.mat[Data.mat[,1]==Data.list[[i]][j,1],i+1] <- Data.mat[Data.mat[,1]==Data.list[[i]][j,1],i+1] + Data.list[[i]][j,3]
+      }
+   }
+
+   # Clustering and binning
+   difference <- Data.mat[,1]-c(0,Data.mat[1:(length(Data.mat[,1])-1),1])
+   difference <- difference[2:length(difference)]
+
+   while(min(difference) < Class.Size){
+      i <- 1
+      while((Data.mat[i+1,1]-Data.mat[i,1])>min(difference) && i <= length(Data.mat[,1])){ 
+         i <- i + 1
+      }
+      Data.sub        <- Data.mat[i,]+Data.mat[i+1,]
+      Data.sub[1]     <- Data.sub[1]/2
+      Data.mat[i,]    <- Data.sub
+      Data.mat[i+1,1] <- 0
+      Data.mat   <- Data.mat[Data.mat[,1]>0,]
+      difference <- Data.mat[,1]-c(0,Data.mat[1:(length(Data.mat[,1])-1),1])
+      difference <- difference[2:length(difference)]
+   }
+   return(Data.mat)
+}
+
+# Sorting the fragment lengths
+Gsort.ftn <- function(Data.list){
+   for(i in 1:length(Data.list)){
+       Data.list[[i]] <- Data.list[[i]][sort.list(Data.list[[i]][,1]),]
+   }
+
+   return(Data.list)
+}
